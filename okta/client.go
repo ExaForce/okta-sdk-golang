@@ -66,6 +66,29 @@ import (
 var (
 	jsonCheck = regexp.MustCompile(`(?i:(?:application|text)/(?:vnd\.[^;]+\+)?json)`)
 	xmlCheck  = regexp.MustCompile(`(?i:(?:application|text)/xml)`)
+	// Heuristics to detect dynamic path segments (UUIDs, long hex, long numeric, tokens)
+	uuidLike      = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	longHexLike   = regexp.MustCompile(`^[0-9a-fA-F]{16,}$`)
+	longNumeric   = regexp.MustCompile(`^[0-9]{6,}$`)
+	longTokenLike = regexp.MustCompile(`^[A-Za-z0-9_-]{16,}$`)
+	// Static literals never normalized to {id}
+	staticLiterals = map[string]struct{}{
+		"api": {}, "v1": {}, "oauth2": {}, ".well-known": {},
+		"me": {}, "default": {}, "current": {}, "metadata": {},
+		"settings": {}, "catalog": {}, "public": {}, "preview": {},
+		"lifecycle": {}, "transactions": {}, "operations": {},
+		"verify": {}, "resume": {}, "test": {}, "activate": {},
+		"deactivate": {}, "suspend": {}, "unsuspend": {}, "clone": {},
+		"retry": {}, "stop": {}, "pause": {}, "publish": {}, "revoke": {},
+		// Additional fixed sub-resources and nouns from Okta endpoints
+		"sign-in": {}, "sign-out": {}, "error": {}, "customized": {},
+		"pages": {}, "schemas": {}, "apps": {}, "group": {}, "groups": {},
+		"user": {}, "users": {}, "clients": {}, "tokens": {}, "roles": {}, "grants": {},
+		"logStream": {}, "logStreams": {}, "uischemas": {},
+		"credentials": {}, "keys": {}, "csrs": {}, "domains": {},
+		"certificate": {}, "execute": {}, "callback": {}, "authorize": {},
+		"questions": {},
+	}
 )
 
 const (
@@ -84,13 +107,14 @@ type RateLimit struct {
 // APIClient manages communication with the Okta Admin Management API v2024.06.1
 // In most cases there should be only one, shared, APIClient.
 type APIClient struct {
-	cfg           *Configuration
-	common        service // Reuse a single struct instead of allocating one for each service on the heap.
-	cache         Cache
-	tokenCache    *goCache.Cache
-	freshcache    bool
-	rateLimit     *RateLimit
-	rateLimitLock sync.Mutex
+	cfg            *Configuration
+	common         service // Reuse a single struct instead of allocating one for each service on the heap.
+	cache          Cache
+	tokenCache     *goCache.Cache
+	freshcache     bool
+	rateLimit      *RateLimit
+	rateLimitByKey map[string]*RateLimit
+	rateLimitLock  sync.Mutex
 
 	// API Services
 
@@ -838,6 +862,7 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.cache = oktaCache
 	c.tokenCache = goCache.New(5*time.Minute, 10*time.Minute)
 	c.common.client = c
+	c.rateLimitByKey = make(map[string]*RateLimit)
 
 	// API Services
 	c.AgentPoolsAPI = (*AgentPoolsAPIService)(&c.common)
@@ -1050,8 +1075,8 @@ func (c *APIClient) prepareRequest(
 	headerParams map[string]string,
 	queryParams url.Values,
 	formParams url.Values,
-	formFiles []formFile) (localVarRequest *http.Request, err error) {
-
+	formFiles []formFile,
+) (localVarRequest *http.Request, err error) {
 	var body *bytes.Buffer
 
 	// Detect postBody type and post.
@@ -1326,11 +1351,17 @@ func (c *APIClient) do(ctx context.Context, req *http.Request) (*http.Response, 
 	if !inCache {
 		if c.cfg.Okta.Client.RateLimit.Enable {
 			c.rateLimitLock.Lock()
-			limit := c.rateLimit
+			// Key rate limits per method + normalized path (exclude querystring)
+			normalizedPath := normalizePath(req.URL.EscapedPath())
+			rateKey := req.Method + " " + req.URL.Scheme + "://" + req.URL.Host + normalizedPath
+			limit, ok := c.rateLimitByKey[rateKey]
+			if !ok {
+				limit = c.rateLimit // fallback to legacy global if present
+			}
 			c.rateLimitLock.Unlock()
 			// If the remaining requests are less than the threshold percentage of the limit, wait for the MaxBackoff
 			if limit != nil && limit.Remaining <= limit.Limit-int(c.cfg.Okta.Client.RateLimit.Threshold)*limit.Limit/100 { // less than threshold
-				timer := time.NewTimer(time.Second * time.Duration(c.cfg.Okta.Client.RateLimit.MaxBackoff))
+				timer := time.NewTimer(time.Duration(int64(limit.Reset)) * time.Second)
 				select {
 				case <-ctx.Done():
 					if !timer.Stop() {
@@ -1345,15 +1376,19 @@ func (c *APIClient) do(ctx context.Context, req *http.Request) (*http.Response, 
 		if err != nil {
 			return nil, err
 		}
-		if resp.StatusCode >= 200 && resp.StatusCode <= 299 && req.Method == http.MethodGet {
-			if c.cfg.Okta.Client.RateLimit.Enable {
-				c.rateLimitLock.Lock()
-				newLimit, err := c.parseLimitHeaders(resp)
-				if err == nil {
-					c.rateLimit = newLimit
-				}
-				c.rateLimitLock.Unlock()
+		if c.cfg.Okta.Client.RateLimit.Enable {
+			c.rateLimitLock.Lock()
+			newLimit, err := c.parseLimitHeaders(resp)
+			if err == nil {
+				normalizedPath := normalizePath(req.URL.EscapedPath())
+				rateKey := req.Method + " " + req.URL.Scheme + "://" + req.URL.Host + normalizedPath
+				c.rateLimitByKey[rateKey] = newLimit
+				// keep global updated for backwards compatibility
+				c.rateLimit = newLimit
 			}
+			c.rateLimitLock.Unlock()
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode <= 299 && req.Method == http.MethodGet {
 			c.cache.Set(cacheKey, resp)
 		}
 		return resp, err
@@ -1551,6 +1586,49 @@ func CacheExpires(r *http.Response) time.Time {
 
 func strlen(s string) int {
 	return utf8.RuneCountInString(s)
+}
+
+// normalizePath replaces dynamic path segments (IDs, tokens) with a stable placeholder
+// to ensure rate limits are tracked per-endpoint rather than per-resource instance.
+func normalizePath(escapedPath string) string {
+	if escapedPath == "" || escapedPath == "/" {
+		return escapedPath
+	}
+	segments := strings.Split(escapedPath, "/")
+	for i, seg := range segments {
+		if seg == "" {
+			continue
+		}
+		if _, ok := staticLiterals[seg]; ok {
+			continue
+		}
+		// Heuristics: UUIDs, long hex, long numeric, or long token-like strings
+		if uuidLike.MatchString(seg) || longHexLike.MatchString(seg) || longNumeric.MatchString(seg) || longTokenLike.MatchString(seg) {
+			segments[i] = "{id}"
+			continue
+		}
+		// Common Okta-style IDs that include underscores or dashes and are moderately long
+		if len(seg) >= 12 && strings.IndexFunc(seg, func(r rune) bool { return r == '_' || r == '-' }) >= 0 {
+			segments[i] = "{id}"
+			continue
+		}
+		// Parent-based heuristic: if previous segment is a plural resource name,
+		// treat current short label as identifier (e.g., roles/APP_ADMIN, clients/{clientId}/tokens/{tokenId})
+		if i > 0 {
+			prev := segments[i-1]
+			if prev != "" {
+				if _, ok := staticLiterals[prev]; !ok {
+					if strings.HasSuffix(prev, "s") || strings.HasSuffix(prev, "es") {
+						if _, ok := staticLiterals[seg]; !ok {
+							segments[i] = "{id}"
+							continue
+						}
+					}
+				}
+			}
+		}
+	}
+	return strings.Join(segments, "/")
 }
 
 // GenericOpenAPIError Provides access to the body, error and model on returned errors.
