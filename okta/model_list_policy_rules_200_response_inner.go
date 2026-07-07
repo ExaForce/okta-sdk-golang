@@ -37,6 +37,7 @@ type ListPolicyRules200ResponseInner struct {
 	ContinuousAccessPolicyRule *ContinuousAccessPolicyRule
 	EntityRiskPolicyRule *EntityRiskPolicyRule
 	IdpDiscoveryPolicyRule *IdpDiscoveryPolicyRule
+	MfaEnrollPolicyRule *MfaEnrollPolicyRule
 	OktaSignOnPolicyRule *OktaSignOnPolicyRule
 	PasswordPolicyRule *PasswordPolicyRule
 	ProfileEnrollmentPolicyRule *ProfileEnrollmentPolicyRule
@@ -74,6 +75,13 @@ func EntityRiskPolicyRuleAsListPolicyRules200ResponseInner(v *EntityRiskPolicyRu
 func IdpDiscoveryPolicyRuleAsListPolicyRules200ResponseInner(v *IdpDiscoveryPolicyRule) ListPolicyRules200ResponseInner {
 	return ListPolicyRules200ResponseInner{
 		IdpDiscoveryPolicyRule: v,
+	}
+}
+
+// MfaEnrollPolicyRuleAsListPolicyRules200ResponseInner is a convenience function that returns MfaEnrollPolicyRule wrapped in ListPolicyRules200ResponseInner
+func MfaEnrollPolicyRuleAsListPolicyRules200ResponseInner(v *MfaEnrollPolicyRule) ListPolicyRules200ResponseInner {
+	return ListPolicyRules200ResponseInner{
+		MfaEnrollPolicyRule: v,
 	}
 }
 
@@ -217,6 +225,30 @@ func (dst *ListPolicyRules200ResponseInner) UnmarshalJSON(data []byte) error {
 		}
 	}
 
+	// check if the discriminator value is 'MFA_ENROLL'
+	if jsonDict["type"] == "MFA_ENROLL" {
+		// try to unmarshal JSON data into MfaEnrollPolicyRule
+		err = json.Unmarshal(data, &dst.MfaEnrollPolicyRule)
+		if err == nil {
+			return nil // data stored in dst.MfaEnrollPolicyRule, return on the first match
+		} else {
+			dst.MfaEnrollPolicyRule = nil
+			return fmt.Errorf("Failed to unmarshal ListPolicyRules200ResponseInner as MfaEnrollPolicyRule: %s", err.Error())
+		}
+	}
+
+	// check if the discriminator value is 'MfaEnrollPolicyRule'
+	if jsonDict["type"] == "MfaEnrollPolicyRule" {
+		// try to unmarshal JSON data into MfaEnrollPolicyRule
+		err = json.Unmarshal(data, &dst.MfaEnrollPolicyRule)
+		if err == nil {
+			return nil // data stored in dst.MfaEnrollPolicyRule, return on the first match
+		} else {
+			dst.MfaEnrollPolicyRule = nil
+			return fmt.Errorf("Failed to unmarshal ListPolicyRules200ResponseInner as MfaEnrollPolicyRule: %s", err.Error())
+		}
+	}
+
 	// check if the discriminator value is 'OktaSignOnPolicyRule'
 	if jsonDict["type"] == "OktaSignOnPolicyRule" {
 		// try to unmarshal JSON data into OktaSignOnPolicyRule
@@ -326,6 +358,10 @@ func (src ListPolicyRules200ResponseInner) MarshalJSON() ([]byte, error) {
 		return json.Marshal(&src.IdpDiscoveryPolicyRule)
 	}
 
+	if src.MfaEnrollPolicyRule != nil {
+		return json.Marshal(&src.MfaEnrollPolicyRule)
+	}
+
 	if src.OktaSignOnPolicyRule != nil {
 		return json.Marshal(&src.OktaSignOnPolicyRule)
 	}
@@ -364,6 +400,10 @@ func (obj *ListPolicyRules200ResponseInner) GetActualInstance() (interface{}) {
 
 	if obj.IdpDiscoveryPolicyRule != nil {
 		return obj.IdpDiscoveryPolicyRule
+	}
+
+	if obj.MfaEnrollPolicyRule != nil {
+		return obj.MfaEnrollPolicyRule
 	}
 
 	if obj.OktaSignOnPolicyRule != nil {

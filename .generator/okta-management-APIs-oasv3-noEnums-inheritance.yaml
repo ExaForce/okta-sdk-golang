@@ -15229,6 +15229,7 @@ paths:
                     - $ref: '#/components/schemas/AuthorizationServerPolicyRule'
                     - $ref: '#/components/schemas/OktaSignOnPolicyRule'
                     - $ref: '#/components/schemas/IdpDiscoveryPolicyRule'
+                    - $ref: '#/components/schemas/MfaEnrollPolicyRule'
                     - $ref: '#/components/schemas/ContinuousAccessPolicyRule'
                     - $ref: '#/components/schemas/EntityRiskPolicyRule'
                   discriminator: &ref_15
@@ -15240,6 +15241,7 @@ paths:
                       RESOURCE_ACCESS: '#/components/schemas/AuthorizationServerPolicyRule'
                       SIGN_ON: '#/components/schemas/OktaSignOnPolicyRule'
                       IDP_DISCOVERY: '#/components/schemas/IdpDiscoveryPolicyRule'
+                      MFA_ENROLL: '#/components/schemas/MfaEnrollPolicyRule'
                       CONTINUOUS_ACCESS: '#/components/schemas/ContinuousAccessPolicyRule'
                       ENTITY_RISK: '#/components/schemas/EntityRiskPolicyRule'
         '403':
@@ -37362,6 +37364,17 @@ components:
           description: Policy conditions aren't supported for this policy types.
           default: null
           nullable: true
+    MfaEnrollPolicyRule:
+      allOf:
+        - $ref: '#/components/schemas/PolicyRule'
+        - type: object
+          description: A policy rule for an MFA_ENROLL (multifactor enrollment) policy. Okta ships no dedicated schema for these rules, so this extends the base PolicyRule.
+          properties:
+            actions:
+              type: object
+              description: The enrollment actions for the MFA enrollment policy rule.
+            conditions:
+              $ref: '#/components/schemas/PolicyRuleConditions'
     EntityRiskPolicyRule:
       allOf:
         - $ref: '#/components/schemas/PolicyRule'
